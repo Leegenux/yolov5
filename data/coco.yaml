@@ -6,11 +6,11 @@
 #     /coco
 #     /yolov5
 
-
 # train and val data as 1) directory: path/images/, 2) file: path/images.txt, or 3) list: [path1/images/, path2/images/]
-train: ../coco/train2017.txt  # 118287 images
-val: ../coco/val2017.txt  # 5000 images
-test: ../coco/test-dev2017.txt  # 20288 of 40670 images, submit to https://competitions.codalab.org/competitions/20794
+
+# to convert the standard COCO dataset format into darknet style, please refer to https://github.com/ultralytics/COCO2YOLO 
+train: ../cv_datasets/coco_for_darknet/images/train2017/  # 118287 images
+val: ../cv_datasets/coco_for_darknet/images/val2017/      # 5000 images
 
 # number of classes
 nc: 80
