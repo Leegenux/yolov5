@@ -3,6 +3,11 @@ from copy import deepcopy
 
 from models.experimental import *
 
+class FCOSDetect(nn.Module):
+    def __init__(self, nc=80, anchors=(), ch=()):  # TODO
+        pass
+
+FCOSClassHead = Conv
 
 class Detect(nn.Module):
     def __init__(self, nc=80, anchors=(), ch=()):  # detection layer
@@ -161,7 +166,7 @@ class Model(nn.Module):
 
 def parse_model(d, ch):  # model_dict, input_channels(3)
     print('\n%3s%18s%3s%10s  %-40s%-30s' % ('', 'from', 'n', 'params', 'module', 'arguments'))
-    anchors, nc, gd, gw = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple']
+    anchors, nc, gd, gw = d.get('anchors', None), d['nc'], d['depth_multiple'], d['width_multiple']  # if anchors is None, we build a FCOS model
     na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
     no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
 
