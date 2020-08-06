@@ -23,6 +23,16 @@ backbone:
    [-1, 3, BottleneckCSP, [1024, False]],  # 9
   ]
 
+# shared_tower = 4, cls_tower = 0, bbox_tower = 0
+fcos_head:  # actual number of modules is `number*depth_multiple`
+  [
+    # shared_tower
+    [[3, 5, 7], 12, Conv, [256, 3, 1]],          # 10 shared tower from P3, P4, P5
+    # cls_tower
+    # bbox_tower
+    [[10, 11, 12], 1, FCOSHead, [nc, ]],
+  ]
+
 # YOLOv5 head
 head:
   [[-1, 1, Conv, [512, 1, 1]],
@@ -44,11 +54,4 @@ head:
    [-1, 3, BottleneckCSP, [1024, False]],  # 23 (P5/32-large)
 
    [[17, 20, 23], 1, Detect, [nc, anchors]],  # Detect(P3, P4, P5)
-  ]
-
-# todo
-fcos_head:  # 注意本配置文件中的depth_multiple
-  [
-    [-1, 12, Conv, [512, 3, 2]], # arg0 [arg1, arg2, arg3]
-    [-1, 1], nn.Conv2d, []
   ]
