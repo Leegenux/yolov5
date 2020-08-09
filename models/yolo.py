@@ -13,35 +13,75 @@ from utils.torch_utils import (
     time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, select_device)
 
 
-class FCOSHead(nn.Module): 
-    def __init__(self, nc=80, in_feat_channels=None):
-        super(Detect, self).__init__()
+class FCOSDetect(nn.Module):
+    def __init__(self, nc=80, in_feat_channels=[], shared_params=False):
+        super(FCOSDetect, self).__init__()
 
-        self.stride = None
-        self.nc = nc  # number of classes
+        self.num_classes = nc  # number of classes
         self.num_levels = len(in_feat_channels)  # check if necessary
-        in_channels = in_feat_channels
+        self._shared_params = shared_params
 
-        # set up the 
-        self.cls_logits = nn.Conv2d(
-            in_channels, self.num_classes,
-            kernel_size=3, stride=1,
-            padding=1
-        )
-        self.bbox_pred = nn.Conv2d(
-            in_channels, 4, kernel_size=3,
-            stride=1, padding=1
-        )
-        self.ctrness = nn.Conv2d(
-            in_channels, 1, kernel_size=3,
-            stride=1, padding=1
-        )
+        # set up the detection heads
+        assert self._shared_params == False
+        if self._shared_params == False:
+            self.cls_logits = nn.ModuleList()
+            self.bbox_pred = nn.ModuleList()
+            self.ctrness = nn.ModuleList()
+            for ch_in in in_feat_channels:
+                self.cls_logits.append(nn.Conv2d(
+                    ch_in, self.num_classes,
+                    kernel_size=3, stride=1,
+                    padding=1
+                ))
+                self.bbox_pred.append(nn.Conv2d(
+                    ch_in, 4, kernel_size=3,
+                    stride=1, padding=1
+                ))
+                self.ctrness.append(nn.Conv2d(
+                    ch_in, 1, kernel_size=3,
+                    stride=1, padding=1
+                ))
+        else:
+            # make sure that ch_ins are same
+            assert len(set(in_feat_channels)
+                       ) == 1, "Please make sure that in features have the same number of channels!"
+            self.cls_logits = nn.Conv2d(
+                in_feat_channels[0], self.num_classes,
+                kernel_size=3, stride=1,
+                padding=1
+            )
+            self.bbox_pred = n.Conv2d(
+                in_feat_channels[0], 4, kernel_size=3,
+                stride=1, padding=1
+            )
+            self.ctrness = nn.Conv2d(
+                in_feat_channels[0], 1, kernel_size=3,
+                stride=1, padding=1
+            )
 
-    def forward(self, x):  # TODO it should be capable of a list of inputs
-        pass
+    def forward(self, x):  # input is a list of features from different levels
+        logits = []
+        bbox_reg = []
+        ctrness = []
 
-        
-        
+        # TODO implement Scale for bbox_reg
+        if self._shared_params == False:
+            for l, feature in enumerate(x):
+                logits.append(self.cls_logits[l](feature))
+                bbox_reg.append(F.relu(self.bbox_pred[l](feature)))
+                ctrness.append(self.ctrness[l](feature))
+
+        else:
+            for feature in x:
+                logits.append(self.cls_logits(feature))
+                bbox_reg.append(F.relu(self.bbox_pred(feature)))
+                ctrness.append(self.ctrness(feature))
+
+        return logits, bbox_reg, ctrness
+
+    def is_shared_params(self):
+        return self._shared_params
+
 
 
 class Detect(nn.Module):
@@ -218,16 +258,18 @@ class Model(nn.Module):
 def parse_model(d, ch):  # model_dict, input_channels(3)
     print('\n%3s%18s%3s%10s  %-40s%-30s' %
           ('', 'from', 'n', 'params', 'module', 'arguments'))
-    # TODO finish the logic: if anchors is None, we build a FCOS model
-    anchors, nc, gd, gw = d.get(
-        'anchors', None), d['nc'], d['depth_multiple'], d['width_multiple']
-    na = (len(anchors[0]) // 2) if isinstance(anchors,
-                                              list) else anchors  # number of anchors
-    no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
+    # no `anchors`, no `no`
+    nc, gd, gw = d['nc'], d['depth_multiple'], d['width_multiple']
+    no = None  # set a default value
+    if d.get('anchors'):
+        anchors = d['anchors']
+        na = (len(anchors[0]) // 2) if isinstance(anchors,
+                                                  list) else anchors  # number of anchors
+        no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
 
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
     # from, number, module, args
-    for i, (f, n, m, args) in enumerate(d['backbone'] + d['head']):
+    for i, (f, n, m, args) in enumerate(d['backbone'] + (d.get('fcos_head') or d.get('head'))):
         m = eval(m) if isinstance(m, str) else m  # eval strings
         for j, a in enumerate(args):
             try:
@@ -265,9 +307,12 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum([ch[-1 if x == -1 else x + 1] for x in f])
-        elif m is Detect:
+        elif m is FCOSDetect:
+            # set in_feat_channels for FCOSHead
             args.append([ch[x + 1] for x in f])
-            if isinstance(args[1], int):  # number of anchors
+        elif m is Detect or m is FCOSDetect:
+            args.append([ch[x + 1] for x in f])
+            if isinstance(args[1], int):  # set the actual number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
         else:
             c2 = ch[f]

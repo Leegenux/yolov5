@@ -17,7 +17,7 @@ def DWConv(c1, c2, k=1, s=1, act=True):
     return Conv(c1, c2, k, s, g=math.gcd(c1, c2), act=act)
 
 
-class Conv(nn.Module):  # TODO maybe rewrite the `Conv` module
+class Conv(nn.Module):
     # Standard convolution
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super(Conv, self).__init__()
@@ -26,6 +26,8 @@ class Conv(nn.Module):  # TODO maybe rewrite the `Conv` module
         self.act = nn.LeakyReLU(0.1, inplace=True) if act else nn.Identity()
 
     def forward(self, x):
+        if isinstance(x, list):     # DEAD CODE: handle multiple inputs 
+            return [self.act(self.bn(self.conv(feat))) for feat in x]
         return self.act(self.bn(self.conv(x)))
 
     def fuseforward(self, x):
