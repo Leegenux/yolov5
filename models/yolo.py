@@ -83,7 +83,6 @@ class FCOSDetect(nn.Module):
         return self._shared_params
 
 
-
 class Detect(nn.Module):
     def __init__(self, nc=80, anchors=(), ch=()):  # detection layer
         super(Detect, self).__init__()
