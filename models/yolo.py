@@ -152,6 +152,7 @@ class Model(nn.Module):
 
         # Build strides, anchors
         m = self.model[-1]  # Detect()
+        self.model_type = type(m)       # add model type tag
         if isinstance(m, Detect):
             s = 128  # 2x min stride
             m.stride = torch.tensor(

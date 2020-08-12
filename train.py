@@ -19,7 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import test  # import test.py to get mAP after each epoch
-from models.yolo import Model
+from models.yolo import Model, Detect   # TODO avoid judging whether the model is FCOS or yolo (remove the import)
 from utils.datasets import create_dataloader
 from utils.general import (
     check_img_size, torch_distributed_zero_first, labels_to_class_weights, plot_labels, check_anchors,
@@ -53,7 +53,7 @@ hyp = {'lr0': 0.01,  # initial learning rate (SGD=1E-2, Adam=1E-3)
        'mixup': 0.0}  # image mixup (probability)
 
 
-def train(hyp, opt, device, tb_writer=None):
+def train(hyp, opt, device, tb_writer=None):  # TODO enable the usage of create_dataloader for fcos
     print(f'Hyperparameters {hyp}')
     log_dir = tb_writer.log_dir if tb_writer else 'runs/evolve'  # run directory
     wdir = str(Path(log_dir) / 'weights') + os.sep  # weights directory
@@ -89,9 +89,10 @@ def train(hyp, opt, device, tb_writer=None):
     # Create model
     model = Model(opt.cfg, nc=nc).to(device)
 
-    # Image sizes
-    gs = int(max(model.stride))  # grid size (max stride)
-    imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
+    # check image sizes
+    if model.model_type == Detect:  # TODO make our `FCOSDetect` compatible with code below
+        gs = int(max(model.stride))  # grid size (max stride)
+        imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
 
     # Optimizer
     nbs = 64  # nominal batch size
@@ -296,7 +297,7 @@ def train(hyp, opt, device, tb_writer=None):
                 # Forward
                 pred = model(imgs)
 
-                # Loss
+                # TODO implement `FCOS` version of `compute_loss`
                 loss, loss_items = compute_loss(pred, targets.to(device), model)  # scaled by batch_size
                 if rank != -1:
                     loss *= opt.world_size  # gradient averaged between devices in DDP mode

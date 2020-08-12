@@ -439,8 +439,12 @@ class BCEBlurWithLogitsLoss(nn.Module):
         loss *= alpha_factor
         return loss.mean()
 
+def build_fcos_targets(targets, model):  # implement this
+    pass
 
 def compute_loss(p, targets, model):  # predictions, targets, model
+    # TODO 判断FCOS依据
+
     device = targets.device
     lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
     tcls, tbox, indices, anchors = build_targets(p, targets, model)  # targets
