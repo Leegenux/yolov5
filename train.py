@@ -19,12 +19,12 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import test  # import test.py to get mAP after each epoch
-from models.yolo import Model, Detect   # TODO avoid judging whether the model is FCOS or yolo (remove the import)
+from models.yolo import Model
 from utils.datasets import create_dataloader
 from utils.general import (
     check_img_size, torch_distributed_zero_first, labels_to_class_weights, plot_labels, check_anchors,
     labels_to_image_weights, compute_loss, plot_images, fitness, strip_optimizer, plot_results,
-    get_latest_run, check_git_status, check_file, increment_dir, print_mutation)
+    get_latest_run, check_git_status, check_file, increment_dir, print_mutation, plot_evolution)
 from utils.google_utils import attempt_download
 from utils.torch_utils import init_seeds, ModelEMA, select_device
 
@@ -89,10 +89,10 @@ def train(hyp, opt, device, tb_writer=None):  # TODO enable the usage of create_
     # Create model
     model = Model(opt.cfg, nc=nc).to(device)
 
-    # check image sizes
-    if model.model_type == Detect:  # TODO make our `FCOSDetect` compatible with code below
-        gs = int(max(model.stride))  # grid size (max stride)
-        imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
+    # set `imgsz` and `imgsz_test` while both meeting the `opt.img_size` and `gs`
+    # which dataloader loads images with
+    gs = int(max(model.stride))  # grid size (max stride)
+    imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
 
     # Optimizer
     nbs = 64  # nominal batch size
@@ -220,7 +220,7 @@ def train(hyp, opt, device, tb_writer=None):  # TODO enable the usage of create_
             # tb_writer.add_hparams(hyp, {})  # causes duplicate https://github.com/ultralytics/yolov5/pull/384
             tb_writer.add_histogram('classes', c, 0)
 
-        # Check anchors
+        # Check anchors (actually not affect the FCOS implementation)
         if not opt.noautoanchor:
             check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)
 

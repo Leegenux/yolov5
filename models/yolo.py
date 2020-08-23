@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from models.common import Conv, Bottleneck, SPP, DWConv, Focus, BottleneckCSP, Concat
 from models.experimental import MixConv2d, CrossConv, C3
@@ -50,7 +51,7 @@ class FCOSDetect(nn.Module):
                 kernel_size=3, stride=1,
                 padding=1
             )
-            self.bbox_pred = n.Conv2d(
+            self.bbox_pred = nn.Conv2d(
                 in_feat_channels[0], 4, kernel_size=3,
                 stride=1, padding=1
             )
@@ -118,7 +119,7 @@ class Detect(nn.Module):
                 y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 +
                                self.grid[i].to(x[i].device)) * self.stride[i]  # xy
                 y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * \
-                    self.anchor_grid[i]  # wh
+                              self.anchor_grid[i]  # wh
                 z.append(y.view(bs, -1, self.no))
 
         return x if self.training else (torch.cat(z, 1), x)
@@ -151,15 +152,19 @@ class Model(nn.Module):
         # print([x.shape for x in self.forward(torch.zeros(1, ch, 64, 64))])
 
         # Build strides, anchors
-        m = self.model[-1]  # Detect()
-        self.model_type = type(m)       # add model type tag
-        if isinstance(m, Detect):
-            s = 128  # 2x min stride
-            m.stride = torch.tensor(
-                [s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
+        m = self.model[-1]
+        ## forward with a fake image and get the strides
+        s = 128  # 2x min stride
+        if isinstance(m, FCOSDetect):
+            m.stride = torch.tensor([s / x.shape[-1] for x in self.forward(torch.zeros(1, ch, s, s))[0]])
+        else:
+            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
+        self.stride = m.stride
+        ## anchors
+        self.model_type = type(m)  # add model type tag
+        if not isinstance(m, FCOSDetect):  # non-FCOS Detect requires anchors
             m.anchors /= m.stride.view(-1, 1, 1)
             check_anchor_order(m)
-            self.stride = m.stride
             self._initialize_biases()  # only run once
             # print('Strides: %s' % m.stride.tolist())
 
@@ -200,7 +205,7 @@ class Model(nn.Module):
                 try:
                     import thop
                     o = thop.profile(m, inputs=(x,), verbose=False)[
-                        0] / 1E9 * 2  # FLOPS
+                            0] / 1E9 * 2  # FLOPS
                 except:
                     o = 0
                 t = time_synchronized()
