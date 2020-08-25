@@ -153,19 +153,20 @@ class Model(nn.Module):
 
         # Build strides, anchors
         m = self.model[-1]
+        self.is_fcos = isinstance(m, FCOSDetect)
         ## forward with a fake image and get the strides
         s = 128  # 2x min stride
-        if isinstance(m, FCOSDetect):
+        if self.is_fcos:
             m.stride = torch.tensor([s / x.shape[-1] for x in self.forward(torch.zeros(1, ch, s, s))[0]])
+            self.size_of_interests = torch.tensor([8 * x for x in m.stride])  # set the size_of_interest
         else:
             m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
         self.stride = m.stride
         ## anchors
-        self.model_type = type(m)  # add model type tag
-        if not isinstance(m, FCOSDetect):  # non-FCOS Detect requires anchors
+        if not self.is_fcos:  # non-FCOS Detect requires anchors
             m.anchors /= m.stride.view(-1, 1, 1)
             check_anchor_order(m)
-            self._initialize_biases()  # only run once
+            self._initialize_biases()  # for non-fcos only
             # print('Strides: %s' % m.stride.tolist())
 
         # Init weights, biases
@@ -258,6 +259,18 @@ class Model(nn.Module):
 
     def info(self):  # print model information
         model_info(self)
+
+    def compute_locations(self, im_width, im_height, device):
+        locations = []
+        for s in self.stride:
+            shift_x = torch.arange(0, im_width, step=s, dtype=torch.float32, device=device)
+            shift_y = torch.arange(0, im_height, step=s, dtype=torch.float32, device=device)
+            shift_y, shift_x = torch.meshgrid(shift_y, shift_x)
+            shift_x = shift_x.reshape(-1)
+            shift_y = shift_y.reshape(-1)
+            locations_per_level = torch.stack((shift_x, shift_y), dim=1) + s // 2
+            locations.append(locations_per_level)
+        return locations
 
 
 def parse_model(d, ch):  # model_dict, input_channels(3)

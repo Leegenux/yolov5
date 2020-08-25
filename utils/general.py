@@ -439,12 +439,30 @@ class BCEBlurWithLogitsLoss(nn.Module):
         loss *= alpha_factor
         return loss.mean()
 
-def build_fcos_targets(targets, model):  # implement this
+
+def build_fcos_targ(targs, model):  # TODO implementation required
+    # input targets(image, class, x, y, w, h)
+    # the x, y, w, h have all been normalized with the image's width and height (https://github.com/ultralytics/COCO2YOLO)
+
+    # several levels. strides differ.
+    # declare a list to store the targets
+
     pass
 
-def compute_loss(p, targets, model):  # predictions, targets, model
-    # TODO 判断FCOS依据
 
+def format_fcos_pred(preds):
+    pass
+
+
+def compute_loss_fcos(preds, targs, model, im_width, im_height):
+    # preds
+    device = targs.device
+    locations = model.compute_locations(im_width, im_height, device)
+    (logits_targ, regs_targ, ctrness_targ) = build_fcos_targ(targs, model)
+    (logits_pred, regs_pred, ctrness_pred) = format_fcos_pred(preds)
+
+
+def compute_loss(p, targets, model):  # predictions, targets, model
     device = targets.device
     lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
     tcls, tbox, indices, anchors = build_targets(p, targets, model)  # targets

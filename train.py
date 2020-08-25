@@ -19,11 +19,11 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import test  # import test.py to get mAP after each epoch
-from models.yolo import Model
+from models.yolo import Model, FCOSDetect
 from utils.datasets import create_dataloader
 from utils.general import (
     check_img_size, torch_distributed_zero_first, labels_to_class_weights, plot_labels, check_anchors,
-    labels_to_image_weights, compute_loss, plot_images, fitness, strip_optimizer, plot_results,
+    labels_to_image_weights, compute_loss, compute_loss_fcos, plot_images, fitness, strip_optimizer, plot_results,
     get_latest_run, check_git_status, check_file, increment_dir, print_mutation, plot_evolution)
 from utils.google_utils import attempt_download
 from utils.torch_utils import init_seeds, ModelEMA, select_device
@@ -53,7 +53,7 @@ hyp = {'lr0': 0.01,  # initial learning rate (SGD=1E-2, Adam=1E-3)
        'mixup': 0.0}  # image mixup (probability)
 
 
-def train(hyp, opt, device, tb_writer=None):  # TODO enable the usage of create_dataloader for fcos
+def train(hyp, opt, device, tb_writer=None):
     print(f'Hyperparameters {hyp}')
     log_dir = tb_writer.log_dir if tb_writer else 'runs/evolve'  # run directory
     wdir = str(Path(log_dir) / 'weights') + os.sep  # weights directory
@@ -221,7 +221,7 @@ def train(hyp, opt, device, tb_writer=None):  # TODO enable the usage of create_
             tb_writer.add_histogram('classes', c, 0)
 
         # Check anchors (actually not affect the FCOS implementation)
-        if not opt.noautoanchor:
+        if not model.is_fcos and not opt.noautoanchor:
             check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)
 
     # Start training
@@ -298,7 +298,11 @@ def train(hyp, opt, device, tb_writer=None):  # TODO enable the usage of create_
                 pred = model(imgs)
 
                 # TODO implement `FCOS` version of `compute_loss`
-                loss, loss_items = compute_loss(pred, targets.to(device), model)  # scaled by batch_size
+                if model.is_fcos:
+                    loss, loss_items = compute_loss_fcos(pred, targets.to(device), model, imgsz, imgsz)
+                else:
+                    loss, loss_items = compute_loss(pred, targets.to(device), model)  # scaled by batch_size
+
                 if rank != -1:
                     loss *= opt.world_size  # gradient averaged between devices in DDP mode
                 # if not torch.isfinite(loss):
