@@ -158,7 +158,7 @@ class Model(nn.Module):
         s = 128  # 2x min stride
         if self.is_fcos:
             m.stride = torch.tensor([s / x.shape[-1] for x in self.forward(torch.zeros(1, ch, s, s))[0]])
-            self.size_of_interests = torch.tensor([8 * x for x in m.stride])  # set the size_of_interest
+            self.sizes_of_interest = torch.tensor([8 * x for x in m.stride])  # set the size_of_interest
         else:
             m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
         self.stride = m.stride
@@ -271,6 +271,56 @@ class Model(nn.Module):
             locations_per_level = torch.stack((shift_x, shift_y), dim=1) + s // 2
             locations.append(locations_per_level)
         return locations
+
+    def get_sample_region(self, boxes, num_loc_list, loc_xs, loc_ys, bitmasks=None):
+        strides = self.stride
+        radius = self.yaml.get('radius', 1)  # defaults to 1
+
+        if bitmasks is not None:
+            _, h, w = bitmasks.size()
+
+            ys = torch.arange(0, h, dtype=torch.float32, device=bitmasks.device)
+            xs = torch.arange(0, w, dtype=torch.float32, device=bitmasks.device)
+
+            m00 = bitmasks.sum(dim=-1).sum(dim=-1).clamp(min=1e-6)
+            m10 = (bitmasks * xs).sum(dim=-1).sum(dim=-1)
+            m01 = (bitmasks * ys[:, None]).sum(dim=-1).sum(dim=-1)
+            center_x = m10 / m00
+            center_y = m01 / m00
+        else:
+            center_x = boxes[..., [0, 2]].sum(dim=-1) * 0.5
+            center_y = boxes[..., [1, 3]].sum(dim=-1) * 0.5
+
+        num_gts = boxes.shape[0]
+        K = len(loc_xs)
+        boxes = boxes[None].expand(K, num_gts, 4)  # expand to fit each location
+        center_x = center_x[None].expand(K, num_gts)  # 针对每个box 获取中心的坐标
+        center_y = center_y[None].expand(K, num_gts)
+        center_gt = boxes.new_zeros(boxes.shape)  # b
+        # no gt
+        if center_x.numel() == 0 or center_x[..., 0].sum() == 0:
+            return loc_xs.new_zeros(loc_xs.shape, dtype=torch.uint8)
+        beg = 0
+        for level, num_loc in enumerate(num_loc_list):  # 根据radius，限制每个box的大小
+            end = beg + num_loc
+            stride = strides[level] * radius
+            xmin = center_x[beg:end] - stride  # 针对每个像素，x的范围（此为最小值）
+            ymin = center_y[beg:end] - stride
+            xmax = center_x[beg:end] + stride
+            ymax = center_y[beg:end] + stride
+            # limit sample region in gt
+            center_gt[beg:end, :, 0] = torch.where(xmin > boxes[beg:end, :, 0], xmin, boxes[beg:end, :, 0])
+            center_gt[beg:end, :, 1] = torch.where(ymin > boxes[beg:end, :, 1], ymin, boxes[beg:end, :, 1])
+            center_gt[beg:end, :, 2] = torch.where(xmax > boxes[beg:end, :, 2], boxes[beg:end, :, 2], xmax)
+            center_gt[beg:end, :, 3] = torch.where(ymax > boxes[beg:end, :, 3], boxes[beg:end, :, 3], ymax)
+            beg = end
+        left = loc_xs[:, None] - center_gt[..., 0]  # 作比较，其中较大的在bbox里面
+        right = center_gt[..., 2] - loc_xs[:, None]
+        top = loc_ys[:, None] - center_gt[..., 1]
+        bottom = center_gt[..., 3] - loc_ys[:, None]
+        center_bbox = torch.stack((left, top, right, bottom), -1)
+        inside_gt_bbox_mask = center_bbox.min(-1)[0] > 0
+        return inside_gt_bbox_mask
 
 
 def parse_model(d, ch):  # model_dict, input_channels(3)
