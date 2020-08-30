@@ -158,7 +158,17 @@ class Model(nn.Module):
         s = 128  # 2x min stride
         if self.is_fcos:
             m.stride = torch.tensor([s / x.shape[-1] for x in self.forward(torch.zeros(1, ch, s, s))[0]])
-            self.sizes_of_interest = torch.tensor([8 * x for x in m.stride])  # set the size_of_interest
+            # sizes of interest
+            INF = 100000000
+            soi = []
+            prev_size = -1
+            for s in self.yaml['soi']:
+                soi.append([prev_size, s])
+                prev_size = s
+            soi.append([prev_size, INF])
+            self.sizes_of_interest = soi
+            # center sample setting
+            self.center_sample = (self.yaml['center_sample'] == 1)
         else:
             m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
         self.stride = m.stride
@@ -322,6 +332,22 @@ class Model(nn.Module):
         inside_gt_bbox_mask = center_bbox.min(-1)[0] > 0
         return inside_gt_bbox_mask
 
+    def _transpose(self, training_targets, num_loc_list):
+        '''
+        This function is used to transpose image first training targets to level first ones
+        :return: level first training targets
+        '''
+        for im_i in range(len(training_targets)):
+            training_targets[im_i] = torch.split(
+                training_targets[im_i], num_loc_list, dim=0
+            )
+
+        targets_level_first = []
+        for targets_per_level in zip(*training_targets):
+            targets_level_first.append(
+                torch.cat(targets_per_level, dim=0)
+            )
+        return targets_level_first
 
 def parse_model(d, ch):  # model_dict, input_channels(3)
     print('\n%3s%18s%3s%10s  %-40s%-30s' %

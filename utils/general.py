@@ -442,7 +442,7 @@ class BCEBlurWithLogitsLoss(nn.Module):
 
 def build_fcos_targ(targs, locations, model):
     INF = 100000000
-    # input targets(image, class, x, y, w, h)
+    # input targets(image, class, x, y, w, h)  # TODO if the size restored or not
     # the x, y, w, h have all been normalized with the image's width and height (https://github.com/ultralytics/COCO2YOLO)
     num_images = len(set(targs[:, 0].tolist()))
     num_loc_list = [len(loc) for loc in locations]
@@ -450,7 +450,10 @@ def build_fcos_targ(targs, locations, model):
     # create loc to size range
     loc_to_size_range = []
     for l, loc_per_level in enumerate(locations):
-        loc_to_size_range.append(loc_per_level.new_tensor(model.sizes_of_interest[l]).expand(num_loc_list[l], 1))
+        loc_to_size_range_per_level = loc_per_level.new_tensor(model.sizes_of_interest[l])  # 用size of interest
+        loc_to_size_range.append(
+            loc_to_size_range_per_level[None].expand(num_loc_list[l], -1)  # expand 表示用已有元素扩充，以满足维度
+        )
 
     locations = torch.cat(locations, dim=0)
     loc_to_size_range = torch.cat(loc_to_size_range, dim=0)
@@ -473,50 +476,50 @@ def build_fcos_targ(targs, locations, model):
             target_inds.append(labels_per_im.new_zeros(locations.size(0)) - 1)
             continue
 
-    area = (bboxes[:, 2] - bboxes[:, 0]) * (bboxes[:, 3] - bboxes[:, 1])
-    l = xs[:, None] - bboxes[:, 0][None]
-    t = ys[:, None] - bboxes[:, 1][None]
-    r = bboxes[:, 2][None] - xs[:, None]
-    b = bboxes[:, 3][None] - ys[:, None]
-    reg_targets_per_im = torch.stack([l, t, r, b], dim=2)  # 每个像素点原始的回归目标
+        area = (bboxes[:, 2] - bboxes[:, 0]) * (bboxes[:, 3] - bboxes[:, 1])
+        l = xs[:, None] - bboxes[:, 0][None]
+        t = ys[:, None] - bboxes[:, 1][None]
+        r = bboxes[:, 2][None] - xs[:, None]
+        b = bboxes[:, 3][None] - ys[:, None]
+        reg_targets_per_im = torch.stack([l, t, r, b], dim=2)  # 每个像素点的回归目标
 
-    if model.center_sample:  # TODO add this to `class Model`
-        if targets_per_im.has("gt_bitmasks_full"):
-            bitmasks = targets_per_im.gt_bitmasks_full  # TODO not implemented and never executed
+        if model.center_sample:
+            if hasattr(targets_per_im, "gt_bitmasks_full"):
+                bitmasks = targets_per_im.gt_bitmasks_full  # TODO not implemented and never executed
+            else:
+                bitmasks = None
+            is_in_boxes = model.get_sample_region(  # 一个用于将bboxes映射到各个层次，并且获取一个mask的函数
+                bboxes, num_loc_list, xs, ys,
+                bitmasks=bitmasks
+            )
         else:
-            bitmasks = None
-        is_in_boxes = model.get_sample_region(  # 一个用于将bboxes映射到各个层次，并且获取一个mask的函数
-            bboxes, num_loc_list, xs, ys,
-            bitmasks=bitmasks
-        )
-    else:
-        is_in_boxes = reg_targets_per_im.min(dim=2)[0] > 0
+            is_in_boxes = reg_targets_per_im.min(dim=2)[0] > 0
 
-    max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
-    # limit the regression range for each location
-    is_cared_in_the_level = \
-        (max_reg_targets_per_im >= loc_to_size_range[:, [0]]) & \
-        (max_reg_targets_per_im <= loc_to_size_range[:, [1]])
+        max_reg_targets_per_im = reg_targets_per_im.max(dim=2)[0]
+        # limit the regression range for each location
+        is_cared_in_the_level = \
+            (max_reg_targets_per_im >= loc_to_size_range[:, [0]]) & \
+            (max_reg_targets_per_im <= loc_to_size_range[:, [1]])
 
-    locations_to_gt_area = area[None].repeat(len(locations), 1)
-    locations_to_gt_area[is_in_boxes == 0] = INF
-    locations_to_gt_area[is_cared_in_the_level == 0] = INF
+        locations_to_gt_area = area[None].repeat(len(locations), 1)
+        locations_to_gt_area[is_in_boxes == 0] = INF
+        locations_to_gt_area[is_cared_in_the_level == 0] = INF
 
-    # if there are still more than one objects for a location,
-    # we choose the one with minimal area
-    locations_to_min_area, locations_to_gt_inds = locations_to_gt_area.min(dim=1)
+        # if there are still more than one objects for a location,
+        # we choose the one with minimal area
+        locations_to_min_area, locations_to_gt_inds = locations_to_gt_area.min(dim=1)
 
-    reg_targets_per_im = reg_targets_per_im[
-        range(len(locations)), locations_to_gt_inds]  # 挑选过后的reg_targets BUG: 默认为0
-    target_inds_per_im = locations_to_gt_inds + num_targets
-    num_targets += len(targets_per_im)
+        reg_targets_per_im = reg_targets_per_im[
+            range(len(locations)), locations_to_gt_inds]  # 挑选过后的reg_targets 默认为0
+        target_inds_per_im = locations_to_gt_inds + num_targets
+        num_targets += len(targets_per_im)
 
-    labels_per_im = labels_per_im[locations_to_gt_inds]
-    labels_per_im[locations_to_min_area == INF] = model.yaml['nc']
+        labels_per_im = labels_per_im[locations_to_gt_inds]
+        labels_per_im[locations_to_min_area == INF] = model.yaml['nc']
 
-    labels.append(labels_per_im)
-    reg_targets.append(reg_targets_per_im)
-    target_inds.append(target_inds_per_im)
+        labels.append(labels_per_im)
+        reg_targets.append(reg_targets_per_im)
+        target_inds.append(target_inds_per_im)
 
     training_targets = {
         "labels": labels,
@@ -525,10 +528,21 @@ def build_fcos_targ(targs, locations, model):
         "locations": [locations.clone() for _ in range(num_images)],
         "im_inds": [locations.new_ones(locations.size(0), dtype=torch.long) * i for i in range(num_images)],
     }
-    # TODO to be continued
 
+    # transpose im-first training_targets to level-first ones
+    training_targets = {
+        k: model._transpose(v, num_loc_list) for k, v in training_targets.items()
+        # 进行索引的调整, 结果就是按照level分片，而image层面则被堆叠起来了
+    }
 
-def format_fcos_pred(preds):
+    training_targets["fpn_levels"] = [  # TODO make sure this part does not affect the following procedures
+        loc.new_ones(len(loc), dtype=torch.long) * level
+        for level, loc in enumerate(training_targets["locations"])
+    ]
+
+    return training_targets
+
+def format_fcos_pred(preds): # TODO to be implemented
     pass
 
 
@@ -536,7 +550,7 @@ def compute_loss_fcos(preds, targs, model, im_width, im_height):
     # preds
     device = targs.device
     locations = model.compute_locations(im_width, im_height, device)
-    (logits_targ, regs_targ, ctrness_targ) = build_fcos_targ(targs, locations, model)
+    training_targets = build_fcos_targ(targs, locations, model)
     (logits_pred, regs_pred, ctrness_pred) = format_fcos_pred(preds)
 
 
