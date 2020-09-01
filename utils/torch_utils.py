@@ -220,3 +220,115 @@ class ModelEMA:
     def update_attr(self, model, include=(), exclude=('process_group', 'reducer')):
         # Update EMA attributes
         copy_attr(self.ema, model, include, exclude)
+
+def sigmoid_focal_loss(
+        inputs: torch.Tensor,
+        targets: torch.Tensor,
+        alpha: float = -1,
+        gamma: float = 2,
+        reduction: str = "none",
+) -> torch.Tensor:
+    """
+    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+        alpha: (optional) Weighting factor in range (0,1) to balance
+                positive vs negative examples. Default = -1 (no weighting).
+        gamma: Exponent of the modulating factor (1 - p_t) to
+               balance easy vs hard examples.
+        reduction: 'none' | 'mean' | 'sum'
+                 'none': No reduction will be applied to the output.
+                 'mean': The output will be averaged.
+                 'sum': The output will be summed.
+    Returns:
+        Loss tensor with the reduction option applied.
+    """
+    p = torch.sigmoid(inputs)
+    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    p_t = p * targets + (1 - p) * (1 - targets)
+    loss = ce_loss * ((1 - p_t) ** gamma)
+
+    if alpha >= 0:
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        loss = alpha_t * loss
+
+    if reduction == "mean":
+        loss = loss.mean()
+    elif reduction == "sum":
+        loss = loss.sum()
+
+    return loss
+
+
+sigmoid_focal_loss_jit = torch.jit.script(
+    sigmoid_focal_loss
+)  # type: torch.jit.ScriptModule
+
+class IOULoss(nn.Module):
+    """
+    Intersetion Over Union (IoU) loss which supports three
+    different IoU computations:
+
+    * IoU
+    * Linear IoU
+    * gIoU
+    """
+    def __init__(self, loc_loss_type='iou'):
+        super(IOULoss, self).__init__()
+        self.loc_loss_type = loc_loss_type
+
+    def forward(self, pred, target, weight=None):
+        """
+        Args:
+            pred: Nx4 predicted bounding boxes
+            target: Nx4 target bounding boxes
+            weight: N loss weight for each instance
+        """
+        pred_left = pred[:, 0]
+        pred_top = pred[:, 1]
+        pred_right = pred[:, 2]
+        pred_bottom = pred[:, 3]
+
+        target_left = target[:, 0]
+        target_top = target[:, 1]
+        target_right = target[:, 2]
+        target_bottom = target[:, 3]
+
+        target_aera = (target_left + target_right) * \
+                      (target_top + target_bottom)
+        pred_aera = (pred_left + pred_right) * \
+                    (pred_top + pred_bottom)
+
+        w_intersect = torch.min(pred_left, target_left) + \
+                      torch.min(pred_right, target_right)
+        h_intersect = torch.min(pred_bottom, target_bottom) + \
+                      torch.min(pred_top, target_top)
+
+        g_w_intersect = torch.max(pred_left, target_left) + \
+                        torch.max(pred_right, target_right)
+        g_h_intersect = torch.max(pred_bottom, target_bottom) + \
+                        torch.max(pred_top, target_top)
+        ac_uion = g_w_intersect * g_h_intersect
+
+        area_intersect = w_intersect * h_intersect
+        area_union = target_aera + pred_aera - area_intersect
+
+        ious = (area_intersect + 1.0) / (area_union + 1.0)
+        gious = ious - (ac_uion - area_union) / ac_uion
+        if self.loc_loss_type == 'iou':
+            losses = -torch.log(ious)
+        elif self.loc_loss_type == 'linear_iou':
+            losses = 1 - ious
+        elif self.loc_loss_type == 'giou':
+            losses = 1 - gious
+        else:
+            raise NotImplementedError
+
+        if weight is not None:
+            return (losses * weight).sum()
+        else:
+            return losses.sum()

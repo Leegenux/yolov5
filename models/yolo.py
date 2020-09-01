@@ -11,7 +11,7 @@ from models.common import Conv, Bottleneck, SPP, DWConv, Focus, BottleneckCSP, C
 from models.experimental import MixConv2d, CrossConv, C3
 from utils.general import check_anchor_order, make_divisible, check_file
 from utils.torch_utils import (
-    time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, select_device)
+    time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, select_device, IOULoss)
 
 
 class FCOSDetect(nn.Module):
@@ -68,15 +68,15 @@ class FCOSDetect(nn.Module):
         # TODO implement Scale for bbox_reg
         if self._shared_params == False:
             for l, feature in enumerate(x):
-                logits.append(self.cls_logits[l](feature))
-                bbox_reg.append(F.relu(self.bbox_pred[l](feature)))
-                ctrness.append(self.ctrness[l](feature))
+                logits.append(self.cls_logits[l](feature).float())
+                bbox_reg.append(F.relu(self.bbox_pred[l](feature)).float())
+                ctrness.append(self.ctrness[l](feature).float())
 
         else:
             for feature in x:
-                logits.append(self.cls_logits(feature))
-                bbox_reg.append(F.relu(self.bbox_pred(feature)))
-                ctrness.append(self.ctrness(feature))
+                logits.append(self.cls_logits(feature).float())
+                bbox_reg.append(F.relu(self.bbox_pred(feature)).float())
+                ctrness.append(self.ctrness(feature).float())
 
         return logits, bbox_reg, ctrness
 
@@ -170,6 +170,11 @@ class Model(nn.Module):
             self.sizes_of_interest = soi
             # center sample setting
             self.center_sample = (self.yaml['center_sample'] == 1)
+            # focal loss hyper parameters
+            self.focal_loss_alpha = self.yaml['focal_loss_alpha']
+            self.focal_loss_gamma = self.yaml['focal_loss_gamma']
+            # IOULoss
+            self.loc_loss_func = IOULoss(self.yaml['iou'])
         else:
             m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
         self.stride = m.stride
@@ -349,6 +354,7 @@ class Model(nn.Module):
                 torch.cat(targets_per_level, dim=0)
             )
         return targets_level_first
+
 
 def parse_model(d, ch):  # model_dict, input_channels(3)
     print('\n%3s%18s%3s%10s  %-40s%-30s' %

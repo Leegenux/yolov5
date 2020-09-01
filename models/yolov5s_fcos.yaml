@@ -60,6 +60,9 @@ head:
 radius: 1
 center_sample: 1      # enable center_sample mode
 soi: [64, 128]
+focal_loss_alpha: 0.25
+focal_loss_gamma: 2.0
+iou: 'giou'
 
 fcos_head:
   [[-1, 1, Conv, [512, 1, 1]],

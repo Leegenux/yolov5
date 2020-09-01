@@ -17,12 +17,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torchvision
+import torch.nn.functional as F
 import yaml
 from scipy.cluster.vq import kmeans
 from scipy.signal import butter, filtfilt
 from tqdm import tqdm
 
-from utils.torch_utils import init_seeds, is_parallel
+from utils.torch_utils import init_seeds, is_parallel, sigmoid_focal_loss_jit
 
 # Set printoptions
 torch.set_printoptions(linewidth=320, precision=5, profile='long')
@@ -473,7 +474,7 @@ def build_fcos_targ(targs, locations, model, im_width, im_height):
         bboxes = xywh2xyxy(targets_per_im[:, 2:6])
         labels_per_im = targets_per_im[:, 1]
 
-        if len(targets_per_im) == 0:
+        if len(targets_per_im) == 0:  # TODO check if numel necessary
             labels.append(labels_per_im.new_zeros(locations.size(0)) + model.nc)
             reg_targets.append(locations.new_zeros((locations.size(0), 4)))
             target_inds.append(labels_per_im.new_zeros(locations.size(0)) - 1)
@@ -520,7 +521,7 @@ def build_fcos_targ(targs, locations, model, im_width, im_height):
         labels_per_im = labels_per_im[locations_to_gt_inds]
         labels_per_im[locations_to_min_area == INF] = model.nc
 
-        labels.append(labels_per_im)
+        labels.append(labels_per_im.long())  # turn long to serve as indices
         reg_targets.append(reg_targets_per_im)
         target_inds.append(target_inds_per_im)
 
@@ -564,21 +565,66 @@ def format_for_calculation(preds, training_targets, model):
     return (logits_pred, reg_pred, ctrness_pred), training_targets
 
 
-def fcos_losses(formatted_preds, traning_targets, model):
-    labels = traning_targets["labels"]
+def compute_ctrness_targets(reg_targets):
+    if len(reg_targets) == 0:
+        return reg_targets.new_zeros(len(reg_targets))
+    left_right = reg_targets[:, [0, 2]]
+    top_bottom = reg_targets[:, [1, 3]]
+    ctrness = (left_right.min(dim=-1)[0] / left_right.max(dim=-1)[0]) * \
+              (top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
+    return torch.sqrt(ctrness)
 
-    pos_inds = torch.nonzero(labels != model.nc).squeeze(1)
+
+def fcos_losses(formatted_preds, training_targets, model):  # TODO implement distributed computation
+    logits_pred, reg_pred, ctrness_pred = formatted_preds
+    labels = training_targets["labels"]
+
+    pos_inds = torch.nonzero(labels != model.nc).squeeze(1)  # 标识了前景点的index
     num_pos = pos_inds.numel()
 
-    class_target = torch.zeros_like()
+    class_target = torch.zeros_like(logits_pred)  # 创建one-hot张量
+    class_target[pos_inds, labels[pos_inds]] = 1
+
+    class_loss = sigmoid_focal_loss_jit(
+        logits_pred,
+        class_target,
+        alpha=model.focal_loss_alpha,  # TODO implement it in the model
+        gamma=model.focal_loss_gamma,
+        reduction="sum",  # check if useful or not
+    )
+
+    pos_reg_targets = training_targets["reg_targets"][pos_inds]
+    ctrness_targets = compute_ctrness_targets(pos_reg_targets)
+    if pos_inds.numel() > 0:
+        reg_loss = model.loc_loss_func( # TODO
+            reg_pred[pos_inds],
+            pos_reg_targets,
+            ctrness_targets,
+        )
+        ctrness_loss = F.binary_cross_entropy_with_logits(
+            ctrness_pred[pos_inds],
+            ctrness_targets,
+        )
+    else:
+        reg_loss = reg_pred.sum() * 0
+        ctrness_loss = ctrness_pred.sum() * 0
+
+    losses = {
+        "loss_fcos_cls": class_loss,
+        "loss_fcos_reg": reg_loss,
+        "loss_fcos_ctr": ctrness_loss
+    }
+    return losses
 
 
 def compute_loss_fcos(preds, targs, model, im_width, im_height):
     device = targs.device
     locations = model.compute_locations(im_width, im_height, device)
     training_targets = build_fcos_targ(targs, locations, model, im_width, im_height)
-    formatted_preds = format_for_calculation(preds, training_targets, model)
-    extras, losses = fcos_losses(formatted_preds, training_targets, model)  # TODO make it yolo-compliant
+    formatted_preds, training_targets = format_for_calculation(preds, training_targets, model)
+    losses = fcos_losses(formatted_preds, training_targets, model)
+    loss_items = None                       # TODO make it yolo-compatible
+    return losses, loss_items
 
 
 def compute_loss(p, targets, model):  # predictions, targets, model
