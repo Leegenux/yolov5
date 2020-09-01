@@ -440,10 +440,13 @@ class BCEBlurWithLogitsLoss(nn.Module):
         return loss.mean()
 
 
-def build_fcos_targ(targs, locations, model):
+def build_fcos_targ(targs, locations, model, im_width, im_height):
     INF = 100000000
-    # input targets(image, class, x, y, w, h)  # TODO if the size restored or not
+    # input targets(image, class, x, y, w, h)
     # the x, y, w, h have all been normalized with the image's width and height (https://github.com/ultralytics/COCO2YOLO)
+    targs[:, [2, 4]] = targs[:, [2, 4]] * im_width
+    targs[:, [3, 5]] = targs[:, [3, 5]] * im_height
+
     num_images = len(set(targs[:, 0].tolist()))
     num_loc_list = [len(loc) for loc in locations]
 
@@ -471,7 +474,7 @@ def build_fcos_targ(targs, locations, model):
         labels_per_im = targets_per_im[:, 1]
 
         if len(targets_per_im) == 0:
-            labels.append(labels_per_im.new_zeros(locations.size(0)) + model.yaml['nc'])
+            labels.append(labels_per_im.new_zeros(locations.size(0)) + model.nc)
             reg_targets.append(locations.new_zeros((locations.size(0), 4)))
             target_inds.append(labels_per_im.new_zeros(locations.size(0)) - 1)
             continue
@@ -515,7 +518,7 @@ def build_fcos_targ(targs, locations, model):
         num_targets += len(targets_per_im)
 
         labels_per_im = labels_per_im[locations_to_gt_inds]
-        labels_per_im[locations_to_min_area == INF] = model.yaml['nc']
+        labels_per_im[locations_to_min_area == INF] = model.nc
 
         labels.append(labels_per_im)
         reg_targets.append(reg_targets_per_im)
@@ -542,16 +545,40 @@ def build_fcos_targ(targs, locations, model):
 
     return training_targets
 
-def format_fcos_pred(preds): # TODO to be implemented
-    pass
+
+def format_for_calculation(preds, training_targets, model):
+    # preds: `logits, bboxes, ctrness` each consists of a list of several levels
+    # each level: `batch, out_channels, width, height`
+    logits_pred, reg_pred, ctrness_pred = preds
+    logits_pred = torch.cat([x.permute(0, 2, 3, 1).reshape(-1, model.nc) for x in logits_pred])
+    reg_pred = torch.cat([x.permute(0, 2, 3, 1).reshape(-1, 4) for x in reg_pred])
+    ctrness_pred = torch.cat([x.permute(0, 2, 3, 1).reshape(-1) for x in ctrness_pred])
+
+    # training_targets
+    training_targets["labels"] = torch.cat([x.reshape(-1) for x in training_targets["labels"]])
+    training_targets["reg_targets"] = torch.cat([x.reshape(-1, 4) for x in training_targets["reg_targets"]])
+    training_targets["target_inds"] = torch.cat([x.reshape(-1) for x in training_targets["target_inds"]])
+    training_targets["locations"] = torch.cat([x.reshape(-1, 2) for x in training_targets["locations"]])
+    training_targets["im_inds"] = torch.cat([x.reshape(-1) for x in training_targets["im_inds"]])
+    training_targets["fpn_levels"] = torch.cat([x.reshape(-1) for x in training_targets["fpn_levels"]])
+    return (logits_pred, reg_pred, ctrness_pred), training_targets
+
+
+def fcos_losses(formatted_preds, traning_targets, model):
+    labels = traning_targets["labels"]
+
+    pos_inds = torch.nonzero(labels != model.nc).squeeze(1)
+    num_pos = pos_inds.numel()
+
+    class_target = torch.zeros_like()
 
 
 def compute_loss_fcos(preds, targs, model, im_width, im_height):
-    # preds
     device = targs.device
     locations = model.compute_locations(im_width, im_height, device)
-    training_targets = build_fcos_targ(targs, locations, model)
-    (logits_pred, regs_pred, ctrness_pred) = format_fcos_pred(preds)
+    training_targets = build_fcos_targ(targs, locations, model, im_width, im_height)
+    formatted_preds = format_for_calculation(preds, training_targets, model)
+    extras, losses = fcos_losses(formatted_preds, training_targets, model)  # TODO make it yolo-compliant
 
 
 def compute_loss(p, targets, model):  # predictions, targets, model
@@ -615,7 +642,7 @@ def compute_loss(p, targets, model):  # predictions, targets, model
     bs = tobj.shape[0]  # batch size
 
     loss = lbox + lobj + lcls
-    return loss * bs, torch.cat((lbox, lobj, lcls, loss)).detach()
+    return loss * bs, torch.cat((lbox, lobj, lcls, loss)).detach()  # loss, loss_item
 
 
 def build_targets(p, targets, model):
