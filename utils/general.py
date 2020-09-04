@@ -522,7 +522,7 @@ def build_fcos_targ(targs, locations, model, im_width, im_height):
         labels_per_im = labels_per_im[locations_to_gt_inds]
         labels_per_im[locations_to_min_area == INF] = model.nc
 
-        labels.append(labels_per_im.long())  # turn long to serve as indices
+        labels.append(labels_per_im)  # turn long to serve as indices
         reg_targets.append(reg_targets_per_im)
         target_inds.append(target_inds_per_im)
 
@@ -594,7 +594,7 @@ def fcos_losses(formatted_preds, training_targets, model, world_size):
     num_pos_avg = max(total_num_pos / world_size, 1.0)
 
     class_target = torch.zeros_like(logits_pred)  # 创建one-hot张量
-    class_target[pos_inds, labels[pos_inds]] = 1
+    class_target[pos_inds, labels[pos_inds].long()] = 1
 
     class_loss = sigmoid_focal_loss_jit(
         logits_pred,
@@ -620,14 +620,15 @@ def fcos_losses(formatted_preds, training_targets, model, world_size):
         ctrness_loss = F.binary_cross_entropy_with_logits(
             pos_ctrness_pred,
             ctrness_targets,
+            reduction="sum"
         ) / num_pos_avg
     else:
         reg_loss = reg_pred.sum() * 0
         ctrness_loss = ctrness_pred.sum() * 0
 
     loss = class_loss + reg_loss + ctrness_loss
-    return loss, torch.Tensor((class_loss, reg_loss, ctrness_loss)).to(
-        loss.device)  # TODO check if the results are normal or not
+    return loss, torch.Tensor((class_loss, reg_loss, ctrness_loss, loss)).to(
+        loss.device)
 
 
 def compute_loss_fcos(preds, targs, model, im_width, im_height, world_size):

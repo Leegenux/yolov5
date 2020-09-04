@@ -260,15 +260,15 @@ def train(hyp, opt, device, tb_writer=None):
         # Update mosaic border
         # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
-        if model.is_fcos:
-            mloss = torch.zeros(3, device=device)  # mean losses
-        else:
-            mloss = torch.zeros(4, device=device)  # mean losses
+        mloss = torch.zeros(4, device=device)  # mean losses
         if rank != -1:
             dataloader.sampler.set_epoch(epoch)
         pbar = enumerate(dataloader)
         if rank in [-1, 0]:
-            print(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'GIoU', 'obj', 'cls', 'total', 'targets', 'img_size'))
+            if model.is_fcos:
+                print(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'cls_loss', 'reg_loss', 'ctr_loss', 'total', 'targets', 'img_size'))
+            else:
+                print(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'GIoU', 'obj', 'cls', 'total', 'targets', 'img_size'))
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------

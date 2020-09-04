@@ -65,8 +65,6 @@ class FCOSDetect(nn.Module):
                 stride=1, padding=1
             )
 
-        # TODO initialize the focal_loss refering to `FCOSHead.__init__`
-
     def forward(self, x):  # input is a list of features from different levels
         logits = []
         bbox_reg = []
