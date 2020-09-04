@@ -19,7 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import test  # import test.py to get mAP after each epoch
-from models.yolo import Model, FCOSDetect
+from models.yolo import Model
 from utils.datasets import create_dataloader
 from utils.general import (
     check_img_size, torch_distributed_zero_first, labels_to_class_weights, plot_labels, check_anchors,
@@ -299,7 +299,7 @@ def train(hyp, opt, device, tb_writer=None):
 
                 # TODO implement `FCOS` version of `compute_loss`
                 if model.is_fcos:
-                    loss, loss_items = compute_loss_fcos(pred, targets.to(device), model, imgsz, imgsz)
+                    loss, loss_items = compute_loss_fcos(pred, targets.to(device), model, imgsz, imgsz, opt.world_size)
                 else:
                     loss, loss_items = compute_loss(pred, targets.to(device), model)  # scaled by batch_size
 

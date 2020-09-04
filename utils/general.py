@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 import torchvision
 import torch.nn.functional as F
+import torch.distributed as dist
 import yaml
 from scipy.cluster.vq import kmeans
 from scipy.signal import butter, filtfilt
@@ -474,7 +475,7 @@ def build_fcos_targ(targs, locations, model, im_width, im_height):
         bboxes = xywh2xyxy(targets_per_im[:, 2:6])
         labels_per_im = targets_per_im[:, 1]
 
-        if len(targets_per_im) == 0:  # TODO check if numel necessary
+        if bboxes.numel() == 0:
             labels.append(labels_per_im.new_zeros(locations.size(0)) + model.nc)
             reg_targets.append(locations.new_zeros((locations.size(0), 4)))
             target_inds.append(labels_per_im.new_zeros(locations.size(0)) - 1)
@@ -574,13 +575,21 @@ def compute_ctrness_targets(reg_targets):
               (top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
     return torch.sqrt(ctrness)
 
+def reduce_sum(tensor, world_size):
+    if world_size < 2:
+        return tensor
+    tensor = tensor.clone()
+    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+    return tensor
 
-def fcos_losses(formatted_preds, training_targets, model):  # TODO implement distributed computation
+def fcos_losses(formatted_preds, training_targets, model, world_size):
     logits_pred, reg_pred, ctrness_pred = formatted_preds
     labels = training_targets["labels"]
 
     pos_inds = torch.nonzero(labels != model.nc).squeeze(1)  # 标识了前景点的index
-    num_pos = pos_inds.numel()
+    num_pos_local = pos_inds.numel()
+    total_num_pos = reduce_sum(pos_inds.new_tensor([num_pos_local]), world_size).item()
+    num_pos_avg = max(total_num_pos / world_size, 1.0)
 
     class_target = torch.zeros_like(logits_pred)  # 创建one-hot张量
     class_target[pos_inds, labels[pos_inds]] = 1
@@ -588,23 +597,28 @@ def fcos_losses(formatted_preds, training_targets, model):  # TODO implement dis
     class_loss = sigmoid_focal_loss_jit(
         logits_pred,
         class_target,
-        alpha=model.focal_loss_alpha,  # TODO implement it in the model
+        alpha=model.focal_loss_alpha,
         gamma=model.focal_loss_gamma,
         reduction="sum",  # check if useful or not
-    )
+    ) / num_pos_avg
 
+    # get the values for positive points
     pos_reg_targets = training_targets["reg_targets"][pos_inds]
+    pos_reg_pred = reg_pred[pos_inds]
+    pos_ctrness_pred = ctrness_pred[pos_inds]
     ctrness_targets = compute_ctrness_targets(pos_reg_targets)
+
+    loss_denorm = max(reduce_sum(ctrness_targets.sum(), world_size) / world_size, 1e-6)
     if pos_inds.numel() > 0:
-        reg_loss = model.loc_loss_func( # TODO
-            reg_pred[pos_inds],
+        reg_loss = model.loc_loss_func(
+            pos_reg_pred,
             pos_reg_targets,
             ctrness_targets,
-        )
+        ) / loss_denorm
         ctrness_loss = F.binary_cross_entropy_with_logits(
-            ctrness_pred[pos_inds],
+            pos_ctrness_pred,
             ctrness_targets,
-        )
+        ) / num_pos_avg
     else:
         reg_loss = reg_pred.sum() * 0
         ctrness_loss = ctrness_pred.sum() * 0
@@ -617,12 +631,12 @@ def fcos_losses(formatted_preds, training_targets, model):  # TODO implement dis
     return losses
 
 
-def compute_loss_fcos(preds, targs, model, im_width, im_height):
+def compute_loss_fcos(preds, targs, model, im_width, im_height, world_size):
     device = targs.device
     locations = model.compute_locations(im_width, im_height, device)
     training_targets = build_fcos_targ(targs, locations, model, im_width, im_height)
     formatted_preds, training_targets = format_for_calculation(preds, training_targets, model)
-    losses = fcos_losses(formatted_preds, training_targets, model)
+    losses = fcos_losses(formatted_preds, training_targets, model, world_size)
     loss_items = None                       # TODO make it yolo-compatible
     return losses, loss_items
 
