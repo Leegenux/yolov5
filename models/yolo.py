@@ -22,6 +22,9 @@ class FCOSDetect(nn.Module):
         self.num_levels = len(in_feat_channels)  # check if necessary
         self._shared_params = shared_params
 
+        prior_prob = 0.01      # related to the dataset
+        bias_value = -math.log((1-prior_prob)/prior_prob)
+
         # set up the detection heads
         assert self._shared_params == False
         if self._shared_params == False:
@@ -34,6 +37,7 @@ class FCOSDetect(nn.Module):
                     kernel_size=3, stride=1,
                     padding=1
                 ))
+                nn.init.constant_(self.cls_logits[-1].bias, bias_value)
                 self.bbox_pred.append(nn.Conv2d(
                     ch_in, 4, kernel_size=3,
                     stride=1, padding=1
@@ -51,6 +55,7 @@ class FCOSDetect(nn.Module):
                 kernel_size=3, stride=1,
                 padding=1
             )
+            nn.init.constant_(self.cls_logits[-1].bias, bias_value)
             self.bbox_pred = nn.Conv2d(
                 in_feat_channels[0], 4, kernel_size=3,
                 stride=1, padding=1
@@ -60,7 +65,7 @@ class FCOSDetect(nn.Module):
                 stride=1, padding=1
             )
 
-            # TODO initialize the focal_loss refering to `FCOSHead.__init__`
+        # TODO initialize the focal_loss refering to `FCOSHead.__init__`
 
     def forward(self, x):  # input is a list of features from different levels
         logits = []
