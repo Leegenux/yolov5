@@ -575,12 +575,14 @@ def compute_ctrness_targets(reg_targets):
               (top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
     return torch.sqrt(ctrness)
 
+
 def reduce_sum(tensor, world_size):
     if world_size < 2:
         return tensor
     tensor = tensor.clone()
     dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
     return tensor
+
 
 def fcos_losses(formatted_preds, training_targets, model, world_size):
     logits_pred, reg_pred, ctrness_pred = formatted_preds
@@ -623,12 +625,9 @@ def fcos_losses(formatted_preds, training_targets, model, world_size):
         reg_loss = reg_pred.sum() * 0
         ctrness_loss = ctrness_pred.sum() * 0
 
-    losses = {
-        "loss_fcos_cls": class_loss,
-        "loss_fcos_reg": reg_loss,
-        "loss_fcos_ctr": ctrness_loss
-    }
-    return losses
+    loss = class_loss + reg_loss + ctrness_loss
+    return loss, torch.Tensor((class_loss, reg_loss, ctrness_loss)).to(
+        loss.device)  # TODO check if the results are normal or not
 
 
 def compute_loss_fcos(preds, targs, model, im_width, im_height, world_size):
@@ -636,9 +635,7 @@ def compute_loss_fcos(preds, targs, model, im_width, im_height, world_size):
     locations = model.compute_locations(im_width, im_height, device)
     training_targets = build_fcos_targ(targs, locations, model, im_width, im_height)
     formatted_preds, training_targets = format_for_calculation(preds, training_targets, model)
-    losses = fcos_losses(formatted_preds, training_targets, model, world_size)
-    loss_items = None                       # TODO make it yolo-compatible
-    return losses, loss_items
+    return fcos_losses(formatted_preds, training_targets, model, world_size)
 
 
 def compute_loss(p, targets, model):  # predictions, targets, model
