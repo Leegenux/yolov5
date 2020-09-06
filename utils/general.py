@@ -540,7 +540,7 @@ def build_fcos_targ(targs, locations, model, im_width, im_height):
         # 进行索引的调整, 结果就是按照level分片，而image层面则被堆叠起来了
     }
 
-    training_targets["fpn_levels"] = [  # TODO make sure this part does not affect the following procedures
+    training_targets["fpn_levels"] = [
         loc.new_ones(len(loc), dtype=torch.long) * level
         for level, loc in enumerate(training_targets["locations"])
     ]
@@ -588,7 +588,7 @@ def fcos_losses(formatted_preds, training_targets, model, world_size):
     logits_pred, reg_pred, ctrness_pred = formatted_preds
     labels = training_targets["labels"]
 
-    pos_inds = torch.nonzero(labels != model.nc).squeeze(1)  # 标识了前景点的index
+    pos_inds = torch.nonzero(labels != model.nc, as_tuple=False).squeeze(1)  # 标识了前景点的index
     num_pos_local = pos_inds.numel()
     total_num_pos = reduce_sum(pos_inds.new_tensor([num_pos_local]), world_size).item()
     num_pos_avg = max(total_num_pos / world_size, 1.0)

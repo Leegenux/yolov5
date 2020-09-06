@@ -18,12 +18,12 @@ from utils.general import (
 from utils.torch_utils import select_device, time_synchronized
 
 
-def test(data,
+def test(data,                      # TODO implement branch for fcos
          weights=None,
          batch_size=16,
          imgsz=640,
          conf_thres=0.001,
-         iou_thres=0.6,  # for NMS
+         iou_thres=0.6,             # for NMS
          save_json=False,
          single_cls=False,
          augment=False,
@@ -99,16 +99,16 @@ def test(data,
         with torch.no_grad():
             # Run model
             t = time_synchronized()
-            inf_out, train_out = model(img, augment=augment)  # inference and training outputs
+            inf_out, train_out = model(img, augment=augment)  # inference and training outputs  # TODO fix `inf_out` and `train_out` for FCOS
             t0 += time_synchronized() - t
 
             # Compute loss
             if training:  # if model has loss hyperparameters
-                loss += compute_loss([x.float() for x in train_out], targets, model)[1][:3]  # GIoU, obj, cls
+                loss += compute_loss([x.float() for x in train_out], targets, model)[1][:3]  # GIoU, obj, cls  # TODO fix `compute_loss` for FCOS
 
             # Run NMS
             t = time_synchronized()
-            output = non_max_suppression(inf_out, conf_thres=conf_thres, iou_thres=iou_thres, merge=merge)
+            output = non_max_suppression(inf_out, conf_thres=conf_thres, iou_thres=iou_thres, merge=merge)  # TODO `non_max_supression` to be implemented
             t1 += time_synchronized() - t
 
         # Statistics per image

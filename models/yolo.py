@@ -21,6 +21,7 @@ class FCOSDetect(nn.Module):
         self.num_classes = nc  # number of classes
         self.num_levels = len(in_feat_channels)  # check if necessary
         self._shared_params = shared_params
+        self.export = False
 
         prior_prob = 0.01      # related to the dataset
         bias_value = -math.log((1-prior_prob)/prior_prob)
@@ -66,6 +67,8 @@ class FCOSDetect(nn.Module):
             )
 
     def forward(self, x):  # input is a list of features from different levels
+        self.training |=  self.export
+        inf_outs = []
         logits = []
         bbox_reg = []
         ctrness = []
@@ -76,12 +79,16 @@ class FCOSDetect(nn.Module):
                 logits.append(self.cls_logits[l](feature).float())
                 bbox_reg.append(F.relu(self.bbox_pred[l](feature)).float())
                 ctrness.append(self.ctrness[l](feature).float())
+                if not self.training:                               # TODO implement the inference part
+                    pass
 
         else:
             for feature in x:
                 logits.append(self.cls_logits(feature).float())
                 bbox_reg.append(F.relu(self.bbox_pred(feature)).float())
                 ctrness.append(self.ctrness(feature).float())
+                if not self.training:
+                    pass
 
         return logits, bbox_reg, ctrness
 
@@ -113,6 +120,9 @@ class Detect(nn.Module):
         for i in range(self.nl):
             x[i] = self.m[i](x[i])  # conv
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
+
+            # view:     batch_size, number_of_anchors, number_of_outputs_per_anchor, ny, nx
+            # permute:  batch_size, number_of_anchors, ny, nx, number_of_outputs_per_anchor
             x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(
                 0, 1, 3, 4, 2).contiguous()
 
